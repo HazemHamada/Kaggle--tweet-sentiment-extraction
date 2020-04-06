@@ -90,7 +90,6 @@ sequencesXt = tokenizer.texts_to_sequences(Xt)
 paddedXt = pad_sequences(sequencesXv, maxlen=max_length, padding=padding_type, truncating=trunc_type)
 
 
-BUFFER_SIZE = 10000
 BATCH_SIZE = 64
 model = tf.keras.Sequential([
     tf.keras.layers.Embedding(vocab_size, embedding_dim, input_length=max_length),
