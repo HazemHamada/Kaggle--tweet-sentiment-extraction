@@ -5,6 +5,7 @@ import tensorflow as tf
 from sklearn.model_selection import train_test_split
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from tensorflow.keras.preprocessing.text import Tokenizer
+from sklearn.preprocessing import LabelEncoder
 import matplotlib.pyplot as plt
 from keras.utils import plot_model
 from nltk.corpus import stopwords
@@ -38,6 +39,7 @@ def clean_text(text):
     # text = text.replace('\t', ' ').replace('\n', ' ')
     text = replace(text, '\t', ' ')
     text = replace(text, '\n', ' ')
+    text = replace(text, 'w/', 'with')
     text = [spell.correction(word) for word in text]  # correct the spelling mistakes in the text
     for punctuation in string.punctuation:
         # text = text.replace(punctuation, ' ')
@@ -60,10 +62,65 @@ train, val = train_test_split(train, test_size=0.3, random_state=1)
 val, test = train_test_split(val, test_size=0.4, random_state=1)
 
 val['text'] = val["text"].apply(lambda x: clean_text(x))
+test['text'] = test["text"].apply(lambda x: clean_text(x))
+
+Xv = val.text
+Yv = val.sentiment
+Xt = train.text
+Yt = train.sentiment
+
+encoder = LabelEncoder()
+Yv = Yv.apply(encoder.fit_transform)
+Yt = Yt.apply(encoder.fit_transform)
+
+vocab_size = 10000
+embedding_dim = 64
+trunc_type='post'
+padding_type='post'
+oov_tok = "<OOV>"
+max_length = 200
+
+tokenizer = Tokenizer(num_words=vocab_size, oov_token=oov_tok)
+tokenizer.fit_on_texts(Xv)
+word_index = tokenizer.word_index
+sequencesXv = tokenizer.texts_to_sequences(Xv)
+paddedXv = pad_sequences(sequencesXv, maxlen=max_length, padding=padding_type, truncating=trunc_type)
+
+sequencesXt = tokenizer.texts_to_sequences(Xt)
+paddedXt = pad_sequences(sequencesXv, maxlen=max_length, padding=padding_type, truncating=trunc_type)
 
 
+BUFFER_SIZE = 10000
+BATCH_SIZE = 64
+model = tf.keras.Sequential([
+    tf.keras.layers.Embedding(vocab_size, embedding_dim, input_length=max_length),
+    tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(64, return_sequences=True)),
+    tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(32)),
+    tf.keras.layers.Dropout(0.3),
+    tf.keras.layers.Dense(64, activation='relu'),
+    tf.keras.layers.Dropout(0.3),
+    tf.keras.layers.Dense(1, activation='sigmoid')
+])
+model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
 
+NUM_EPOCHS = 5
+history = model.fit(paddedXv, Yv, epochs=NUM_EPOCHS, validation_data=(Xt, Yt), verbose=1)
 
+results = model.evaluate(paddedXt, Yt, batch_size=BATCH_SIZE)
+
+gc.collect()
+
+def plot_graphs(history, string):
+  plt.plot(history.history[string])
+  plt.plot(history.history['val_'+string])
+  plt.xlabel("Epochs")
+  plt.ylabel(string)
+  plt.legend([string, 'val_'+string])
+  plt.show()
+
+plot_graphs(history, 'accuracy')
+
+plot_graphs(history, 'loss')
 
 
 
