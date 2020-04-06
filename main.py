@@ -56,7 +56,10 @@ train = train.dropna()
 train = train.drop_duplicates()
 plt.hist(train.sentiment)
 
-train['text'] = train["text"].apply(lambda x: clean_text(x))
+train, val = train_test_split(train, test_size=0.3, random_state=1)
+val, test = train_test_split(val, test_size=0.4, random_state=1)
+
+val['text'] = val["text"].apply(lambda x: clean_text(x))
 
 
 
