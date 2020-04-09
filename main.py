@@ -2,14 +2,19 @@ import warnings
 import pandas as pd
 import numpy as np
 import tensorflow as tf
+from keras.models import Model, Sequential
+from keras.layers import Input, LSTM, Dense, Embedding, TimeDistributed, Bidirectional, Dropout, Flatten
 from sklearn.model_selection import train_test_split
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from tensorflow.keras.preprocessing.text import Tokenizer
 from sklearn.preprocessing import LabelEncoder
+import tensorflow.keras.utils as ku
 import matplotlib.pyplot as plt
 from keras.utils import plot_model
 from nltk.corpus import stopwords
 from spellchecker import SpellChecker
+from sklearn import metrics
 import gc
 import string
 import re
@@ -17,8 +22,91 @@ import re
 warnings.filterwarnings("ignore")
 warnings.filterwarnings("error", message=".*check_inverse*.", category=UserWarning, append=False)
 
-train = pd.read_csv("train.csv")
 
+def clean(reg_exp, text):
+    text = re.sub(reg_exp, " ", text)
+
+    # replace multiple spaces with one.
+    text = re.sub('\s{2,}', ' ', text)
+
+    return text
+
+def remove_urls(text):
+    text = clean(r"http\S+", text)
+    text = clean(r"www\S+", text)
+    text = clean(r"pic.twitter.com\S+", text)
+
+    return text
+
+def basic_clean(text):
+    text=remove_urls(text)
+    text = clean(r'[\?\.\!]+(?=[\?\.\!])', text) #replace double punctuation with single
+    text = clean(r"[^A-Za-z0-9\.\'!\?,\$]", text) #removes unicode characters
+    return text
+
+########################################################################################################################
+# solution1 (the analytical way)
+
+
+def predict_analytically(test_subset, sentiment):
+
+    test_subset = test_subset.apply(lambda x: basic_clean(x))
+    sentiment = sentiment.apply(lambda x: basic_clean(x))
+
+    sid = SentimentIntensityAnalyzer()
+    word_list = []
+    i = 0
+    for word in test_subset:
+
+        split_text = word.split()
+        score_list = []
+
+        if sentiment[i] == 'positive':
+            for w in split_text:
+                score = sid.polarity_scores(w)['compound']
+                score_list.append(score)
+                max_index = np.argmax(score_list)
+            word_list.append(split_text[max_index])
+
+        elif sentiment[i] == 'negative':
+            for w in split_text:
+                score = sid.polarity_scores(w)['compound']
+                score_list.append(score)
+                min_index = np.argmin(score_list)
+            word_list.append(split_text[min_index])
+
+        else:
+            word_list.append(word)
+
+        i = i + 1
+    return word_list
+
+
+train = pd.read_csv('train.csv')
+test = pd.read_csv('test.csv')
+
+train = train.dropna()
+train = train.drop_duplicates()
+
+test = train.dropna()
+test = train.drop_duplicates()
+
+selected_text_train_pred= predict_analytically(train['text'].astype(str), train['sentiment'].astype(str))
+
+submission = pd.read_csv("sample_submission.csv")
+
+test_subset = test['text'].astype(str)
+sentiment = test['sentiment'].astype(str)
+
+submission["selected_text"] = predict_analytically(test_subset, sentiment)
+
+
+
+########################################################################################################################
+# solution2
+
+
+"""
 
 def replace(text, old, new):
     new_strings = []
@@ -53,59 +141,162 @@ def clean_text(text):
     text = ' '.join(word for word in text if word not in Stopwords)  # delete stopwors from text
     return text
 
+"""
+
+train = pd.read_csv("train.csv")
 
 train = train.dropna()
 train = train.drop_duplicates()
-plt.hist(train.sentiment)
+#plt.hist(train.sentiment)
 
-train, val = train_test_split(train, test_size=0.3, random_state=1)
-val, test = train_test_split(val, test_size=0.4, random_state=1)
 
-val['text'] = val["text"].apply(lambda x: clean_text(x))
-test['text'] = test["text"].apply(lambda x: clean_text(x))
+train['text'] = train["text"].apply(lambda x: basic_clean(x))
+train['selected_text'] = train["selected_text"].apply(lambda x: basic_clean(x))
+# encoder = LabelEncoder()
+# X2v = encoder.fit_transform(X2v)
+# X2t = encoder.fit_transform(X2t)
+train['sentiment'] = train['sentiment'].apply(lambda x: 2 if x == 'positive' else 1 if x == 'neutral' else 0)
 
-Xv = val.text
-Yv = val.sentiment
-Xt = train.text
-Yt = train.sentiment
+train, test = train_test_split(train, test_size=0.2, random_state=1)
 
-encoder = LabelEncoder()
-Yv = Yv.apply(encoder.fit_transform)
-Yt = Yt.apply(encoder.fit_transform)
+########################################################################################################################
 
+# X1 = train.text
+# X2 = train.sentiment
+# Y = train.selected_text
+
+train['len1'] = train['text'].apply(lambda x:len(x))
+train['len2'] = train['selected_text'].apply(lambda x:len(x))
+
+selected_texts = train['selected_text'].astype(str)
+all_train_texts = train['text'].astype(str)
+#text_locations = [all_train_texts[i].find(s) for i, s in enumerate(selected_texts)]
+len1 = train['len1']
+len2 = train['len2']
+sentiment = train['sentiment']
+
+##############################################################################################
+
+def get_locations(text, selText,ln):
+
+    result = np.zeros(ln)
+    j=0
+    for i in selText.split():
+        result[j] = (text.find(i)+1)
+        j = j+1
+    result = pd.Series(result)
+    return result
+
+
+mx=0
+for i in train['selected_text']:
+    if mx<np.alen(i):
+        mx=np.alen(i)
+
+locations = pd.Series([])
+for _,row in train.iterrows():
+    locations.append(get_locations(row['text'], row['selected_text'], mx))
+
+
+
+"""
 vocab_size = 10000
-embedding_dim = 64
+embedding_dim = 100
 trunc_type='post'
 padding_type='post'
 oov_tok = "<OOV>"
-max_length = 200
+max_length = 100
 
 tokenizer = Tokenizer(num_words=vocab_size, oov_token=oov_tok)
-tokenizer.fit_on_texts(Xv)
+tokenizer.fit_on_texts(X1v)
 word_index = tokenizer.word_index
-sequencesXv = tokenizer.texts_to_sequences(Xv)
-paddedXv = pad_sequences(sequencesXv, maxlen=max_length, padding=padding_type, truncating=trunc_type)
 
-sequencesXt = tokenizer.texts_to_sequences(Xt)
-paddedXt = pad_sequences(sequencesXv, maxlen=max_length, padding=padding_type, truncating=trunc_type)
+sequencesX1v = tokenizer.texts_to_sequences(X1v)
+X1v = pad_sequences(sequencesX1v, maxlen=max_length, padding=padding_type, truncating=trunc_type)
+
+sequencesX1t = tokenizer.texts_to_sequences(X1t)
+X1t = pad_sequences(sequencesX1t, maxlen=max_length, padding=padding_type, truncating=trunc_type)
+
+sequencesYv = tokenizer.texts_to_sequences(Yv)
+Yv = pad_sequences(sequencesYv, maxlen=max_length, padding=padding_type, truncating=trunc_type)
+
+sequencesYt = tokenizer.texts_to_sequences(Yt)
+Yt = pad_sequences(sequencesYt, maxlen=max_length, padding=padding_type, truncating=trunc_type)
 
 
+Xv = np.column_stack((X1v, X2v))
+Xt = np.column_stack((X1t, X2t))
+
+gc.collect()
+
+total_words = len(tokenizer.word_index) + 1
+max_length = max_length+1
+"""
+
+########################################################################################################################
+
+
+
+########################################################################################################################
+"""
 BATCH_SIZE = 64
-model = tf.keras.Sequential([
-    tf.keras.layers.Embedding(vocab_size, embedding_dim, input_length=max_length),
-    tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(64, return_sequences=True)),
-    tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(32)),
-    tf.keras.layers.Dropout(0.3),
-    tf.keras.layers.Dense(64, activation='relu'),
-    tf.keras.layers.Dropout(0.3),
-    tf.keras.layers.Dense(1, activation='sigmoid')
+
+
+model1 = Sequential([
+    Embedding(vocab_size, embedding_dim, input_length=max_length),
+    Bidirectional(LSTM(64, return_sequences=True)),
+    Bidirectional(LSTM(32, return_sequences=True)),
 ])
-model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
 
-NUM_EPOCHS = 5
-history = model.fit(paddedXv, Yv, epochs=NUM_EPOCHS, validation_data=(Xt, Yt), verbose=1)
 
-results = model.evaluate(paddedXt, Yt, batch_size=BATCH_SIZE)
+model2 = tf.keras.Sequential()
+model2.add(tf.keras.layer.Embedding(total_words, 100, input_length=max_length))
+model2.add(Bidirectional(LSTM(150, return_sequences=True)))
+model2.add(Dropout(0.2))
+model2.add(Bidirectional(LSTM(100, return_sequences=True)))
+model2.add(Dense(total_words/2, activation='relu'))
+model2.add(Dense(total_words, activation='softmax'))
+
+
+
+
+def seq2seq_model_builder(HIDDEN_DIM=300):
+
+    encoder_inputs = Input(shape=((max_length, 1)), dtype='int32', )
+    encoder_embedding = Embedding(total_words, 100, input_length=max_length)(encoder_inputs)
+    encoder_LSTM = LSTM(HIDDEN_DIM, return_state=True)
+    encoder_outputs, state_h, state_c = encoder_LSTM(encoder_embedding)
+
+    decoder_inputs = Input(shape=((max_length, 1)), dtype='int32', )
+    decoder_embedding = Embedding(total_words, 100, input_length=max_length)(decoder_inputs)
+    decoder_LSTM = LSTM(HIDDEN_DIM, return_state=True, return_sequences=True)
+    decoder_outputs, _, _ = decoder_LSTM(decoder_embedding, initial_state=[state_h, state_c])
+
+    # dense_layer = Dense(VOCAB_SIZE, activation='softmax')
+    outputs = TimeDistributed(Dense(vocab_size, activation='softmax'))(decoder_outputs)
+    model = Model([encoder_inputs, decoder_inputs], outputs)
+
+    return model
+
+
+model1.compile(loss='sparse_categorical_crossentropy', optimizer='rmsprop', metrics=['accuracy'])
+model2.compile(loss='sparse_categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+model3 = seq2seq_model_builder()
+model3.compile(loss='sparse_categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+
+NUM_EPOCHS = 2
+history1 = model1.fit(np.array(Xv), np.array(Yv), epochs=NUM_EPOCHS, validation_data=(np.array(Xt), np.array(Yt)), verbose=1)
+results1 = model1.evaluate(np.array(Xt), np.array(Yt), batch_size=BATCH_SIZE)
+
+
+history2 = model2.fit(np.array(Xv), np.array(Yv), epochs=NUM_EPOCHS, validation_data=(np.array(Xt), np.array(Yt)), verbose=1)
+results2 = model2.evaluate(np.array(Xt), np.array(Yt), batch_size=BATCH_SIZE)
+
+
+history3 = model3.fit(np.array(Xv), np.array(Yv), epochs=NUM_EPOCHS, validation_data=(np.array(Xt), np.array(Yt)), verbose=1)
+results3 = model3.evaluate(np.array(Xt), np.array(Yt), batch_size=BATCH_SIZE)
+
 
 gc.collect()
 
@@ -117,11 +308,63 @@ def plot_graphs(history, string):
   plt.legend([string, 'val_'+string])
   plt.show()
 
-plot_graphs(history, 'accuracy')
+plot_graphs(history1, 'accuracy')
 
-plot_graphs(history, 'loss')
+plot_graphs(history1, 'loss')
 
 
+
+
+
+
+
+def seq2seq_model_builder(HIDDEN_DIM=300):
+
+    encoder_inputs = Input(shape=(max_length,), dtype='int32', )
+    encoder_embedding = Embedding(total_words, 100, input_length=max_length)(encoder_inputs)
+    encoder_LSTM = LSTM(HIDDEN_DIM, return_state=True)
+    encoder_outputs, state_h, state_c = encoder_LSTM(encoder_embedding)
+
+    decoder_inputs = Input(shape=(max_length,), dtype='int32', )
+    decoder_embedding = Embedding(total_words, 100, input_length=max_length)(decoder_inputs)
+    decoder_LSTM = LSTM(HIDDEN_DIM, return_state=True, return_sequences=True)
+    decoder_outputs, _, _ = decoder_LSTM(decoder_embedding, initial_state=[state_h, state_c])
+
+    # dense_layer = Dense(VOCAB_SIZE, activation='softmax')
+    outputs = TimeDistributed(Dense(vocab_size, activation='softmax'))(decoder_outputs)
+    model = Model([encoder_inputs, decoder_inputs], outputs)
+
+    return model
+
+
+max_length=100
+
+model3 = seq2seq_model_builder()
+model3.compile(loss='sparse_categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+history3 = model3.fit(np.array(Xv), np.array(Yv), epochs=NUM_EPOCHS, validation_data=(np.array(Xt), np.array(Yt)), verbose=1)
+
+
+history3 = model3.fit([X1v, X2v], Yv, epochs=NUM_EPOCHS, validation_split=0.2, verbose=1)
+
+
+
+
+model4 = Sequential()
+model4.add(LSTM(256, input_shape=(Xv.shape[0], X1v.shape[1]), return_sequences=True))
+model4.add(Dropout(0.2))
+model4.add(LSTM(256, return_sequences=True))
+model4.add(Dropout(0.2))
+model4.add(LSTM(128))
+model4.add(Dropout(0.2))
+model4.add(Dense(Yv.shape[1], activation='softmax'))
+
+model4.compile(loss='sparse_categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+history4 = model3.fit([X1v, X2v], Yv, epochs=NUM_EPOCHS, validation_split=0.2, verbose=1)
+
+"""
+
+########################################################################################################################
 
 
 
