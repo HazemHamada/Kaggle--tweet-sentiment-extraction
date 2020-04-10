@@ -4,6 +4,8 @@ import numpy as np
 import tensorflow as tf
 from keras.models import Model, Sequential
 from keras.layers import Input, LSTM, Dense, Embedding, TimeDistributed, Bidirectional, Dropout, Flatten
+from sklearn import linear_model
+import lightgbm as lgb
 from sklearn.model_selection import train_test_split
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 from tensorflow.keras.preprocessing.sequence import pad_sequences
@@ -45,9 +47,10 @@ def basic_clean(text):
     return text
 
 ########################################################################################################################
+
 # solution1 (the analytical way)
 
-
+"""
 def predict_analytically(test_subset, sentiment):
 
     test_subset = test_subset.apply(lambda x: basic_clean(x))
@@ -100,9 +103,10 @@ sentiment = test['sentiment'].astype(str)
 
 submission["selected_text"] = predict_analytically(test_subset, sentiment)
 
-
+"""
 
 ########################################################################################################################
+
 # solution2
 
 
@@ -144,6 +148,8 @@ def clean_text(text):
 """
 
 train = pd.read_csv("train.csv")
+test = pd.read_csv("test.csv")
+submission = pd.read_csv("sample_submission.csv")
 
 train = train.dropna()
 train = train.drop_duplicates()
@@ -157,7 +163,7 @@ train['selected_text'] = train["selected_text"].apply(lambda x: basic_clean(x))
 # X2t = encoder.fit_transform(X2t)
 train['sentiment'] = train['sentiment'].apply(lambda x: 2 if x == 'positive' else 1 if x == 'neutral' else 0)
 
-train, test = train_test_split(train, test_size=0.2, random_state=1)
+
 
 ########################################################################################################################
 
@@ -170,14 +176,20 @@ train['len2'] = train['selected_text'].apply(lambda x:len(x))
 
 selected_texts = train['selected_text'].astype(str)
 all_train_texts = train['text'].astype(str)
-#text_locations = [all_train_texts[i].find(s) for i, s in enumerate(selected_texts)]
+
+
+#text_locations=pd.Series([])
+#for i, s in enumerate(selected_texts):
+#    text_locations = all_train_texts[i].find(s)
+
+text_locations = [all_train_texts[i].find(s) for i, s in enumerate(selected_texts)]
+train['text_locations'] = text_locations
 len1 = train['len1']
 len2 = train['len2']
 sentiment = train['sentiment']
 
-##############################################################################################
-
-def get_locations(text, selText,ln):
+"""
+def get_new_locations(text, selText,ln):
 
     result = np.zeros(ln)
     j=0
@@ -195,9 +207,54 @@ for i in train['selected_text']:
 
 locations = pd.Series([])
 for _,row in train.iterrows():
-    locations.append(get_locations(row['text'], row['selected_text'], mx))
+    locations.append(get_new_locations(row['text'], row['selected_text'], mx))
+"""
 
+#train, test = train_test_split(train, test_size=0.2, random_state=1)
 
+# to predict 'len2'
+Y_train1 = train['len2']
+X_train1 = train[['sentiment', 'len1']]
+X_test = test[['sentiment', 'len1']]
+
+# to predict 'text_location'
+Y_train2 = train['text_location']
+X_train2 = train[['sentiment', 'len1']]
+
+reg = lgb.LGBMRegressor()
+#reg = linear_model.LinearRegression()
+reg.fit(X_train1, Y_train1)
+
+predicted1 = np.round(reg.predict(X_test))
+predicted1[predicted1 < 1] = 1
+predicted1
+
+reg2 = lgb.LGBMRegressor()
+#reg2 = linear_model.LinearRegression()
+reg2.fit(X_train2, Y_train2)
+
+predicted2 = np.round(reg2.predict(X_test))
+predicted2[predicted2 < 1] = 1
+
+# now predctions are of the form: index of starting character + length of word
+predicted = predicted1 + predicted2
+
+sub = test[['textID', 'text']]
+sub['preds'] = predicted
+
+sub['text2'] = sub["text"].apply(lambda x: x.split())
+text2 = sub['text2']
+
+textx = sub['text'].tolist()
+text_sub = [s[int(predicted2.tolist()[ind]):int(predicted2.tolist()[ind])+int(predicted1.tolist()[ind])] for ind, s in enumerate(textx)]
+
+text2 = [l[-int(predicted.tolist()[ind]):] for ind, l in enumerate(text2)]
+sub['text22'] = text2
+sub['result'] = sub["text22"].apply(lambda x: " ".join(x))
+
+submission["selected_text"] = sub['result']
+submission.to_csv('submission.csv', index=False)
+########################################################################################################################
 
 """
 vocab_size = 10000
@@ -235,9 +292,6 @@ max_length = max_length+1
 
 ########################################################################################################################
 
-
-
-########################################################################################################################
 """
 BATCH_SIZE = 64
 
@@ -364,7 +418,6 @@ history4 = model3.fit([X1v, X2v], Yv, epochs=NUM_EPOCHS, validation_split=0.2, v
 
 """
 
-########################################################################################################################
 
 
 
