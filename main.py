@@ -227,7 +227,7 @@ reg.fit(X_train1, Y_train1)
 
 predicted1 = np.round(reg.predict(X_test))
 predicted1[predicted1 < 1] = 1
-predicted1
+
 
 reg2 = lgb.LGBMRegressor()
 #reg2 = linear_model.LinearRegression()
